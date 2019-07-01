@@ -1,0 +1,1055 @@
+--   _______________________________________________
+--  |                                               |
+--  |   DATA INGESTION AND PROCESSING - ASSIGNMENT  |
+--  |_______________________________________________|
+--
+--  OVERVIEW:
+--  The New York City Taxi & Limousine Commission (TLC) has provided a dataset of trips made by the taxis in the New York City. 
+--  The detailed trip-level data is more than just a vast list of taxi pickup and drop off coordinates.  
+--  The purpose of this dataset is to get a better understanding of the taxi system so that the city of New York can improve the efficiency of in-city commutes.
+
+--  IMPORTANT: BEFORE CREATING ANY TABLE, MAKE SURE YOU RUN THIS COMMAND 
+ADD JAR /opt/cloudera/parcels/CDH/lib/hive/lib/hive-hcatalog-core-1.1.0-cdh5.11.2.jar;
+
+--  SETTING THE EXECUTION ENGINE AS MAP REDUCE
+SET hive.execution.engine=mr;
+
+--  DROPPING THE EXISTING TABLES TO ENSURE WE START FRESH
+DROP TABLE IF EXISTS nyc_taxi;
+
+--  CREATING REGULAR EXTERNAL TABLE FOR GIVEN DATASET (nyc_taxi_data)
+CREATE EXTERNAL TABLE nyc_taxi(
+VendorID INT,
+tpep_pickup_datetime TIMESTAMP,
+tpep_dropoff_datetime TIMESTAMP,
+passenger_count TINYINT,
+trip_distance DOUBLE,
+RatecodeID TINYINT,
+store_and_fwd_flag VARCHAR(2),
+PULocationID INT,
+DOLocationID INT,
+payment_type TINYINT,
+fare_amount DOUBLE,
+extra DOUBLE,
+mta_tax DOUBLE,
+tip_amount DOUBLE,
+tolls_amount DOUBLE,
+improvement_surcharge DOUBLE,
+total_amount DOUBLE)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+STORED AS TEXTFILE
+LOCATION '/common_folder/nyc_taxi_data'
+TBLPROPERTIES ("skip.header.line.count"="1");
+
+--  VERIFYING IF THE TABLE IS CREATED SUCCESSFULLY WITH RECORDS IN IT
+SELECT count(*) as `Total Records` FROM nyc_taxi;
+
+--  OUTPUT:
+--  total records
+--  1174569
+
+
+--   ___________________________________________
+--  |                                           |
+--  |   PERFORMING EXPLORATORY DATA ANALYSIS    |
+--  |___________________________________________|
+--
+--  VERIFYING IF TABLE CREATION WAS SUCCESSFUL AND MATCHES WITH THE DATA DICTIONARY CONSTRAINTS
+--  NUMBER OF DISTINCT VALUES WILL ALSO HELP US DECIDE ON BASIS OF WHICH COLUMN SHOULD WE PARTITION
+
+SELECT COUNT(*) AS `Total Records`,
+       COUNT(DISTINCT vendorID) AS `Distinct Vendors`,
+       COUNT(DISTINCT Passenger_count) AS `Distinct Passenger Counts`,
+       COUNT(DISTINCT RateCodeID) AS `Distinct Rate Code IDs`,
+       COUNT(DISTINCT Store_and_fwd_flag) AS `Distinct Store and Fwd Flags`,
+       COUNT(DISTINCT Payment_type) AS `Distinct Payment Types`,
+       COUNT(DISTINCT to_date(tpep_pickup_datetime)) AS `Distinct Pickup Date Counts`,
+       COUNT(DISTINCT to_date(tpep_dropoff_datetime)) AS `Distinct Dropoff Date Counts`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  total records	distinct vendors	distinct passenger counts	distinct rate code ids	distinct store and fwd flags	distinct payment types	distinct pickup date counts	distinct dropoff date counts
+--  1174569	        2	                10	                        7	                    2	                            4	                    66	                        67
+
+--  SUMMARY OF RESULT:
+--  WE OBTAINED SOME UNUSUAL/UNEXPECTED RESULTS FROM OUR PREVIOUS QUERY.
+--  FURTHER GETTING INTO THE DETAILS BY DISPLAYING INDIVIDUAL DISTINCT VALUES AND MATCHING IT WITH DATA DICTIONARY
+
+--  QUERYING DISTINCT VENDORS
+SELECT vendorID,
+       count(*) AS `Count of Vendor IDs`
+FROM nyc_taxi
+GROUP BY vendorID
+ORDER BY vendorID;
+
+--  OUTPUT:
+--  vendorid	count of vendor ids
+--  1	        527386
+--  2	        647183
+
+--  SUMMARY OF RESULT:
+--  We do have almost equal distribution of trips across Passenger_count.
+--  Passenger_count could be used to partition data.
+
+--  QUERYING DISTINCT PASSENGER COUNTS
+SELECT Passenger_count,
+       count(*) AS `Count of Passenger Counts`
+FROM nyc_taxi
+GROUP BY Passenger_count
+ORDER BY Passenger_count;
+
+--  OUTPUT:
+--  passenger_count     count of passenger counts
+--  0                   6824
+--  1                   827499
+--  2                   176872
+--  3                   50693
+--  4                   24951
+--  5                   54568
+--  6                   33146
+--  7                   12
+--  8                   3
+--  9                   1
+
+--  SUMMARY OF RESULT:
+--  We see that 6.824K trips took place with 0 passengers, which seems to be invalid/unexpected.
+--  We will further investigate which vendor is doing so.
+--  We do not have equal distribution of trips across Passenger_count.
+--  Passenger_count should not be used to partition data.
+
+--  FURTHER INVESTIGATING THE PROPORTION OF TRIPS WITH 0 PASSENGERS ACROSS VENDORS
+SELECT vendorID,
+       count(vendorID) AS `Count of trips by vendor`
+FROM nyc_taxi
+WHERE Passenger_count=0
+GROUP BY vendorID
+ORDER BY vendorID;
+
+--  OUTPUT:
+--  vendorid	count of trips by vendor
+--  1	        6813
+--  2	        11
+
+--  SUMMARY OF RESULT:
+--  We see that 6.813K trips took place with 0 passengers, by VendorID 1.
+--  We see that 11 trips took place with 0 passengers, by vendorID 2.
+--  VendorID 1 and VendorID 2 needs to be informed/interrogated for the reason of trips with 0 passengers.
+--  VendorID 1 must be strictly interrogated for the reason of trips with 0 passengers, since the numbers are significantly high.
+
+--  QUERYING DISTINCT RATE CODE IDs
+SELECT RateCodeID,
+       count(*) AS `Count of Trips`
+FROM nyc_taxi
+GROUP BY RateCodeID
+ORDER BY RateCodeID;
+
+--  OUTPUT:
+--  ratecodeid	    count of trips
+--  1	            1142278
+--  2	            25338
+--  3	            2562
+--  4	            586
+--  5	            3793
+--  6	            3
+--  99	            9
+
+--  SUMMARY OF RESULT: 
+--  We see that 9 trips have RateCodeID of 99, which seems invalid. 
+--  We will further investigate which vendor is doing so.
+--  We do not have equal distribution of trips across RateCodeID.
+--  RateCodeID should not be used to partition data.
+
+--  FURTHER INVESTIGATING THE PROPORTION OF TRIPS WITH RATECODEID AS 99 ACROSS VENDORS
+SELECT vendorID,
+       count(*) AS `Count of trips by vendor`
+FROM nyc_taxi
+WHERE RateCodeID=99
+GROUP BY vendorID
+ORDER BY vendorID;
+
+--  OUTPUT:
+--  vendorid	count of trips by vendor
+--  1	        8
+--  2	        1
+
+
+--  SUMMARY OF RESULT:
+--  We see that 8 trips took place with RateCodeID of 99, by VendorID 1.
+--  We see that 11 trips took place RateCodeID of 99, by VendorID 2.
+--  VendorID 1 as well as VendorID 2 needs to be informed/interrogated for the reason of trips with RateCodeID of 99.
+
+--  QUERYING DISTINCT STORE AND FWD FLAGS
+SELECT Store_and_fwd_flag,
+       count(*) AS `Count of Trips`
+FROM nyc_taxi
+GROUP BY Store_and_fwd_flag
+ORDER BY Store_and_fwd_flag;
+
+--  OUTPUT:
+--  store_and_fwd_flag	    count of trips
+--  N	                    1170618
+--  Y	                    3951
+
+--  SUMMARY OF RESULT:
+--  We do not have equal distribution of trips across Store_and_fwd_flag.
+--  Store_and_fwd_flag should not be used to partition data.
+
+--  QUERYING DISTINCT PAYMENT TYPES
+SELECT Payment_type,
+       count(*) AS `Count of Trips`
+FROM nyc_taxi
+GROUP BY Payment_type
+ORDER BY Payment_type;
+
+--  OUTPUT:
+--  payment_type    count of trips
+--  1	            790256
+--  2	            376374
+--  3	            6274
+--  4	            1665
+
+--  SUMMARY OF RESULT:
+--  We do not have equal distribution of trips across Payment_type.
+--  Payment_type should not be used to partition data.
+
+--  QUERYING DISTINCT DATES OF RIDE (PICKUP)
+SELECT to_date(tpep_pickup_datetime) AS `Pickup Date`,
+       count(*) AS `Count of Trips`
+FROM nyc_taxi
+GROUP BY to_date(tpep_pickup_datetime)
+ORDER BY `Pickup Date`;
+
+--  OUTPUT:
+--  pickup date	    count of trips
+--  2003-01-01	    1
+--  2008-12-31	    2
+--  2009-01-01	    1
+--  2017-10-31	    6
+--  2017-11-01	    20667
+--  ..              ..
+--  ..              ..
+
+--  SUMMARY OF RESULT:
+--  We do have almost equal distribution of trips across `Pickup Date`.
+--  to_date(tpep_pickup_datetime) could be used to partition data.
+--  We do have some data outside of our analysis window, i.e. outside of November and December 2017.
+--  We observe that there are significantly less number of trips on/near holidays like Thanksgiving Day (November 23rd 2017) and Christmas (December 25th 2017).
+
+--  QUERYING DISTINCT DATES OF RIDE (DROP)
+SELECT to_date(tpep_dropoff_datetime) AS `Dropoff Date`,
+       count(*) AS `Count of Trips`
+FROM nyc_taxi
+GROUP BY to_date(tpep_dropoff_datetime)
+ORDER BY `Dropoff Date`;
+
+--  OUTPUT:
+--  dropoff date    count of trips
+--  2003-01-01	    1
+--  2008-12-31	    1
+--  2009-01-01	    2
+--  2017-10-31	    2
+--  2017-11-01	    20515
+--  2017-11-02	    20726
+--  ..              ..
+--  ..              ..
+
+--  SUMMARY OF RESULT:
+--  We do have almost equal distribution of trips across `Dropoff Date`.
+--  to_date(tpep_dropoff_datetime) could be used to partition data.
+--  We do have some data outside of our analysis window, i.e. outside of November and December 2017.
+--  We observe that there are significantly less number of trips on/near holidays like Thanksgiving Day (November 23rd 2017) and Christmas (December 25th 2017).
+
+--  QUERYING RANGE OF TRIP_DISTANCE
+SELECT min(trip_distance) AS `Minimum Trip Distance`, avg(trip_distance) AS `Average Trip Distance`, max(trip_distance) AS `Maximum Trip Distance`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  minimum trip distance   average trip distance   maximum trip distance
+--  0	                    2.871182901983631	    126.41
+
+--  QUERYING PERCENTILE OF TRIP_DISTANCE
+SELECT  percentile_approx(trip_distance, 0.1) AS `1th Percentile of Trip Distance`,
+        percentile_approx(trip_distance, 0.25) AS `25th Percentile of Trip Distance`,
+        percentile_approx(trip_distance, 0.50) AS `50th Percentile of Trip Distance`,
+        percentile_approx(trip_distance, 0.75) AS `75th Percentile of Trip Distance`,
+        percentile_approx(trip_distance, 0.75) AS `99th Percentile of Trip Distance`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  1th percentile of trip distance     25th percentile of trip distance    50th percentile of trip distance    75th percentile of trip distance    99th percentile of trip distance
+--  0.597499531276632                   0.9487685685347738                  1.5950578323972642                  2.979844696969697                   2.979844696969697
+
+--  QUERYING TRIP COUNT WITH NEGATIVE OR ZERO TRIP_DISTANCE
+SELECT count(*) AS `Number of Negative or Zero Trip Distance` 
+FROM nyc_taxi 
+WHERE trip_distance<=0;
+
+--  OUTPUT:
+--  number of negative or zero trip distance
+--  7402
+
+--  QUERYING TRIP COUNT WITH NEGATIVE OR ZERO TRIP_DISTANCE ACROSS VENDORS
+SELECT vendorID, count(*) AS `Number of Negative or Zero Trip Distance` 
+FROM nyc_taxi 
+WHERE trip_distance<=0
+GROUP BY vendorID;
+
+--  OUTPUT:
+--  vendorid    number of negative or zero trip distance
+--  2           3185
+--  1           4217
+
+--  SUMMARY OF RESULT:
+--  The distance of trip is distributed well, as expected.
+--  There are 7402 trips with 0 trip_distance which is unusual or erroneous since a trip must cover some positive trip distance.
+--  Both vendors have significant number of trips with negative or zero trip distance.
+
+--  QUERYING RANGE OF FARE_AMOUNT
+SELECT min(fare_amount) AS `Minimum Fare Amount`, avg(fare_amount) AS `Average Fare Amount`, max(fare_amount) AS `MaximumFare Amount`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  minimum fare amount     average fare amount     maximumfare amount
+--  -200                    12.995402543401063      650
+
+--  QUERYING PERCENTILE OF FARE_AMOUNT
+SELECT  percentile_approx(fare_amount, 0.1) AS `1th Percentile of Fare Amount`,
+        percentile_approx(fare_amount, 0.25) AS `25th Percentile of Fare Amount`,
+        percentile_approx(fare_amount, 0.50) AS `50th Percentile of Fare Amount`,
+        percentile_approx(fare_amount, 0.75) AS `75th Percentile of Fare Amount`,
+        percentile_approx(fare_amount, 0.75) AS `99th Percentile of Fare Amount`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  1th percentile of fare amount   25th percentile of fare amount  50th percentile of fare amount  75th percentile of fare amount  99th percentile of fare amount
+--  4.9362761547186045              6.410911030020977               9.390657514976596               14.497164463861084              14.497164463861084
+
+--  QUERYING TRIP COUNT WITH NEGATIVE OR ZERO FARE_AMOUNT
+SELECT count(*) AS `Number of Zero or Negative Fare Amount` 
+FROM nyc_taxi 
+WHERE fare_amount<=0;
+
+--  OUTPUT:
+--  number of zero or negative fare amount
+--  870
+
+--  QUERYING TRIP COUNT WITH ZERO OR NEGATIVE FARE_AMOUNT ACROSS VENDORS
+SELECT vendorID, count(*) AS `Number of Zero or Negative Fare Amount`
+FROM nyc_taxi 
+WHERE fare_amount<=0
+GROUP BY vendorID;
+
+--  OUTPUT:
+--  vendorid    number of zero or negative fare amount
+--  2           639
+--  1           231
+
+--  SUMMARY OF RESULT:
+--  Distribution of trip fare appears fine.
+--  There are several zero or negative fare amount which is unusual or erroneous since a trip must have positive fare amount.
+--  Such data, with Zero or Negative Fare Amount are coming more from vendorID 2.
+
+
+--  QUERYING RANGE OF EXTRA CHARGE LEVIED
+SELECT extra AS `Extra Charge Levied`,
+       count(*) AS `Count of Trips`
+FROM nyc_taxi
+GROUP BY extra
+ORDER BY `Count of Trips`;
+
+--  OUTPUT:
+--  extra charge levied	    count of trips
+--  4.8	                    1
+--  -10.6                   1
+--  2                       1
+--  1.5                     2
+--  -4.5                    5
+--  1.3                     13
+--  0.8                     15
+--  0.3                     36
+--  -1                      87
+--  -0.5                    193
+--  4.5                     4502
+--  1                       174386
+--  0.5                     363455
+--  0                       631872
+
+--  QUERYING TRIP COUNT WITH NEGATIVE EXTRA CHARGE LEVIED
+SELECT count(*) AS `Number of Negative Extra Charge Levied Trips` 
+FROM nyc_taxi 
+WHERE extra<0;
+
+--  OUTPUT:
+--  number of negative extra charge levied trips
+--  286
+
+--  QUERYING TRIP COUNT WITH NEGATIVE EXTRA CHARGE LEVIED ACROSS VENDORS
+SELECT vendorID, count(*) AS `Number of Negative Extra Charge Levied Trips` 
+FROM nyc_taxi 
+WHERE extra<0
+GROUP BY vendorID;
+
+--  OUTPUT:
+--  vendorid	number of 0 distance trips
+--  2	        285
+--  1	        1
+
+--  SUMMARY OF RESULT:
+--  There are 286 trips with negatice extra charges levied which is unusual or erroneous since a trip must have either 0 or more extra charges.
+--  Such data, with Negative Extra Charge Levied are mostly coming from vendorID 2.
+
+--  QUERYING RANGE OF MTA_TAX
+SELECT min(mta_tax) AS `Minimum MTA Tax`, avg(mta_tax) AS `Average MTA Tax`, max(mta_tax) AS `Maximum MTA Tax`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  minimum mta tax     average mta tax         maximum mta tax
+--  -0.5                0.49734021585790195     11.4
+
+--  QUERYING PERCENTILE OF MTA_TAX
+SELECT  percentile_approx(mta_tax, 0.1) AS `1th Percentile of MTA Tax`,
+        percentile_approx(mta_tax, 0.25) AS `25th Percentile of MTA Tax`,
+        percentile_approx(mta_tax, 0.50) AS `50th Percentile of MTA Tax`,
+        percentile_approx(mta_tax, 0.75) AS `75th Percentile of MTA Tax`,
+        percentile_approx(mta_tax, 0.75) AS `99th Percentile of MTA Tax`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  1th percentile of mta tax   25th percentile of mta tax  50th percentile of mta tax  75th percentile of mta tax  99th percentile of mta tax
+--  0.04778987255566279         0.12315851231665333         0.24877291191830422         0.3743873115199551          0.3743873115199551
+
+--  QUERYING TRIP COUNT WITH NEGATIVE MTA_TAX
+SELECT count(*) AS `Number of Negative MTA Tax` 
+FROM nyc_taxi 
+WHERE mta_tax<0;
+
+--  OUTPUT:
+--  number of negative mta tax
+--  544
+
+--  QUERYING TRIP COUNT WITH ZERO OR NEGATIVE MTA_TAX ACROSS VENDORS
+SELECT vendorID, count(*) AS `Number of Negative MTA Tax` 
+FROM nyc_taxi 
+WHERE mta_tax<0
+GROUP BY vendorID;
+
+--  OUTPUT:
+--  vendorid    number of negative mta tax
+--  2           544
+
+--  SUMMARY OF RESULT:
+--  Distribution of MTA Tax is fine.
+--  There are 544 negative MTA Tax which is unusual or erroneous since a trip must have positive MTA Tax.
+--  Such data, with Negative MTA Tax are coming only from vendorID 2.
+
+--  QUERYING RANGE OF TIP_AMOUNT
+SELECT min(tip_amount) AS `Minimum Tip Amount`, avg(tip_amount) AS `Average Tip Amount`, max(tip_amount) AS `Maximum Tip Amount`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  minimum tip amount      average tip amount      maximum tip amount
+--  -1.16                   1.8531238522389821      450
+
+--  QUERYING PERCENTILE OF TIP_AMOUNT
+SELECT  percentile_approx(tip_amount, 0.1) AS `1th Percentile of Tip Amount`,
+        percentile_approx(tip_amount, 0.25) AS `25th Percentile of Tip Amount`,
+        percentile_approx(tip_amount, 0.50) AS `50th Percentile of Tip Amount`,
+        percentile_approx(tip_amount, 0.75) AS `75th Percentile of Tip Amount`,
+        percentile_approx(tip_amount, 0.75) AS `99th Percentile of Tip Amount`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  1th percentile of tip amount    25th percentile of tip amount   50th percentile of tip amount   75th percentile of tip amount   99th percentile of tip amount
+--  -0.474474819007503              -0.196177570093458              1.3529116578138105              2.449371268859221               2.449371268859221
+
+--  QUERYING TRIP COUNT WITH NEGATIVE TIP_AMOUNT
+SELECT count(*) AS `Number of Negative Tip Amount` 
+FROM nyc_taxi 
+WHERE tip_amount<0;
+
+--  OUTPUT:
+--  number of negative tip amount
+--  4
+
+--  QUERYING TRIP COUNT WITH NEGATIVE TIP_AMOUNT ACROSS VENDORS
+SELECT vendorID, count(*) AS `Number of Negative Tip Amount` 
+FROM nyc_taxi 
+WHERE tip_amount<0
+GROUP BY vendorID;
+
+--  OUTPUT:
+--  vendorid    number of negative tip amount
+--  2           4
+
+--  SUMMARY OF RESULT:
+--  Distribution of tip amount is fine.
+--  There are some negative tip amounts which is unusual or erroneous since a trip must have 0 or positive tip amount.
+--  Such data, with Negative Tip Amount are coming only from vendorID 2.
+
+--  QUERYING RANGE OF TOLLS_AMOUNT
+SELECT min(tolls_amount) AS `Minimum Tolls Amount`, avg(tolls_amount) AS `Average Tolls Amount`, max(tolls_amount) AS `Maximum Tolls Amount`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  minimum tolls amount    average tolls amount    maximum tolls amount
+--  -5.76                   0.3274266049932418      895.89
+
+--  QUERYING PERCENTILE OF TOLLS_AMOUNT
+SELECT  percentile_approx(tolls_amount, 0.1) AS `1th Percentile of Tolls Amount`,
+        percentile_approx(tolls_amount, 0.25) AS `25th Percentile of Tolls Amount`,
+        percentile_approx(tolls_amount, 0.50) AS `50th Percentile of Tolls Amount`,
+        percentile_approx(tolls_amount, 0.75) AS `75th Percentile of Tolls Amount`,
+        percentile_approx(tolls_amount, 0.75) AS `99th Percentile of Tolls Amount`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  1th percentile of tolls amount  25th percentile of tolls amount     50th percentile of tolls amount     75th percentile of tolls amount     99th percentile of tolls amount
+--  -5.152342864636336              -4.240833880481323                  -2.7216522402229666                 -1.2024705999646113                 -1.2024705999646113
+
+--  QUERYING TRIP COUNT WITH NEGATIVE TOLLS AMOUNT
+SELECT count(*) AS `Number of Negative Tolls Amount` 
+FROM nyc_taxi 
+WHERE tolls_amount<0;
+
+--  OUTPUT:
+--  number of negative tolls amount
+--  3
+
+--  QUERYING TRIP COUNT WITH NEGATIVE TOLLS AMOUNT ACROSS VENDORS
+SELECT vendorID, count(*) AS `Number of Negative Total Amount` 
+FROM nyc_taxi 
+WHERE tolls_amount<0
+GROUP BY vendorID;
+
+--  OUTPUT:
+--  vendorid    number of negative total amount
+--  2           3
+
+--  SUMMARY OF RESULT:
+--  Distribution of total amount is fine.
+--  There are 3 negative tolls amounts which is unusual or erroneous since a trip must have positive tolls amount.
+--  Such data, with Zero or Negative Tolls Amount are coming only from vendorID 2.
+
+--  QUERYING RANGE OF IMPROVEMENT_SURCHARGE
+SELECT min(improvement_surcharge) AS `Minimum Improvement Surcharge`, avg(improvement_surcharge) AS `Average Improvement Surcharge`, max(improvement_surcharge) AS `Maximum Improvement Surcharge`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  minimum improvement surcharge   average improvement surcharge   maximum improvement surcharge
+--  -0.3                            0.2996440396369447              1
+
+--  QUERYING PERCENTILE OF IMPROVEMENT_SURCHARGE
+SELECT  percentile_approx(improvement_surcharge, 0.1) AS `1th Percentile of Improvement Surcharge`,
+        percentile_approx(improvement_surcharge, 0.25) AS `25th Percentile of Improvement Surcharge`,
+        percentile_approx(improvement_surcharge, 0.50) AS `50th Percentile of Improvement Surcharge`,
+        percentile_approx(improvement_surcharge, 0.75) AS `75th Percentile of Improvement Surcharge`,
+        percentile_approx(improvement_surcharge, 0.75) AS `99th Percentile of Improvement Surcharge`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  1th percentile of improvement surcharge     25th percentile of improvement surcharge    50th percentile of improvement surcharge    75th percentile of improvement surcharge    99th percentile of improvement surcharge
+--  0.029805720274000615                        0.07483827062672528                         0.14989252121459973                         0.22494677180247416                         0.22494677180247416
+
+--  QUERYING TRIP COUNT WITH NEGATIVE IMPROVEMENT_SURCHARGE
+SELECT count(*) AS `Number of Negative Improvement Surcharge` 
+FROM nyc_taxi 
+WHERE improvement_surcharge<0;
+
+--  OUTPUT:
+--  number of negative improvement surcharge
+--  558
+
+--  QUERYING TRIP COUNT WITH NEGATIVE IMPROVEMENT_SURCHARGE ACROSS VENDORS
+SELECT vendorID, count(*) AS `Number of Negative IMPROVEMENT SURCHARGE` 
+FROM nyc_taxi 
+WHERE improvement_surcharge<0
+GROUP BY vendorID;
+
+--  OUTPUT:
+--  vendorid    number of negative improvement surcharge
+--  2           558
+
+--  SUMMARY OF RESULT:
+--  Distribution of total amount is fine.
+--  There are 558 negative improvement surcharge which is unusual or erroneous since a trip must have positive improvement surcharge.
+--  Such data, with Zero or Negative Improvement Surcharge are coming only from vendorID 2.
+
+--  QUERYING RANGE OF TOTAL AMOUNT
+SELECT min(total_amount) AS `Minimum Trip Fare`, avg(total_amount) AS `Average Trip Fare`, max(total_amount) AS `Maximum Trip Fare`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  minimum trip fare   average trip fare   maximum trip fare
+--  -200.8              16.295857186944886  928.19
+
+--  QUERYING PERCENTILE OF TOTAL_AMOUNT
+SELECT  percentile_approx(total_amount, 0.1) AS `1th Percentile of Total Amount`,
+        percentile_approx(total_amount, 0.25) AS `25th Percentile of Total Amount`,
+        percentile_approx(total_amount, 0.50) AS `50th Percentile of Total Amount`,
+        percentile_approx(total_amount, 0.75) AS `75th Percentile of Total Amount`,
+        percentile_approx(total_amount, 0.75) AS `99th Percentile of Total Amount`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  1th percentile of total amount  25th percentile of total amount     50th percentile of total amount     75th percentile of total amount     99th percentile of total amount
+--  6.7917509385764605              8.740536110024768                   11.797931937172775                  17.79615914597214                   17.79615914597214
+
+--  QUERYING TRIP COUNT WITH NEGATIVE OR ZERO TOTAL AMOUNT
+SELECT count(*) AS `Number of Zero or Negative Total Amount` 
+FROM nyc_taxi 
+WHERE total_amount<=0;
+
+--  OUTPUT:
+--  number of zero or negative total amount
+--  681
+
+--  QUERYING TRIP COUNT WITH ZERO OR NEGATIVE TOTAL AMOUNT ACROSS VENDORS
+SELECT vendorID, count(*) AS `Number of Zero or Negative Total Amount` 
+FROM nyc_taxi 
+WHERE total_amount<=0
+GROUP BY vendorID;
+
+--  OUTPUT:
+--  vendorid    number of zero or negative total amount
+--  2           639
+--  1           42
+
+--  SUMMARY OF RESULT:
+--  Distribution of total amount is fine.
+--  There are several zero or negative total amounts which is unusual or erroneous since a trip must have positive total amount.
+--  Such data, with Zero or Negative Total Amount are coming more from vendorID 2.
+
+--  SINCE WE WANT TO PARTITION THE DATA
+--  IMPORTANT: BEFORE PARTITIONING ANY TABLE, MAKE SURE YOU RUN THESE COMMANDS
+
+SET hive.exec.dynamic.partition=TRUE;
+SET hive.exec.dynamic.partition.mode=nonstrict;
+SET hive.exec.max.dynamic.partitions=100000;
+SET hive.exec.max.dynamic.partitions.pernode=100000;
+
+--  DROPPING THE EXISTING TABLES TO ENSURE WE START FRESH
+DROP TABLE IF EXISTS nyc_taxi_partitioned;
+
+--  CREATING PARTITIONING TABLE TO IMPROVE PERFORMANCE
+--  We are partitioning data on the basis of year of pickup, month of pickup, date of pickup
+--  We are clustering data on the basis of tip_amount
+--  The selection of above keys for partitioning and bucketing/clustering is subjective and are chosen after reviewing queries we might run.
+--  We have chosen the keys which might be used significantly in queries during analysis phase.
+
+CREATE EXTERNAL TABLE nyc_taxi_partitioned(
+VendorID INT,
+passenger_count TINYINT,
+trip_distance DOUBLE,
+RatecodeID TINYINT,
+store_and_fwd_flag VARCHAR(2),
+PULocationID INT,
+DOLocationID INT,
+payment_type TINYINT,
+fare_amount DOUBLE,
+extra DOUBLE,
+mta_tax DOUBLE,
+tip_amount DOUBLE,
+tolls_amount DOUBLE,
+improvement_surcharge DOUBLE,
+total_amount DOUBLE,
+speed DOUBLE)
+PARTITIONED BY (`pickup_year` INT, `pickup_month` INT, `pickup_day` INT)
+CLUSTERED BY (`tip_amount`) INTO 5 BUCKETS
+LOCATION '/user/hive/warehouse/raiaman15_nyc_taxi_partitioned';
+
+--  VERIFYING IF THE ORIGINAL TABLE IS CREATED AND CONTAINS DATA
+SELECT count(*) AS `Number of Records`
+FROM nyc_taxi;
+
+--  OUTPUT:
+--  number of records
+--  1174569
+
+--  LOADING DATA IN PARTITIONED TABLE FROM THE EXISTING TABLE
+INSERT OVERWRITE TABLE nyc_taxi_partitioned PARTITION(`pickup_year`, `pickup_month`, `pickup_day`)
+SELECT vendorID,
+       passenger_count,
+       trip_distance,
+       RatecodeID,
+       store_and_fwd_flag,
+       PULocationID,
+       DOLocationID,
+       payment_type,
+       fare_amount,
+       extra,
+       mta_tax,
+       tip_amount,
+       tolls_amount,
+       improvement_surcharge,
+       total_amount,
+       trip_distance/((unix_timestamp(tpep_dropoff_datetime) - unix_timestamp(tpep_pickup_datetime))/3600) as `speed`,
+       year(tpep_pickup_datetime) AS `pickup_year`,
+       month(tpep_pickup_datetime) AS `pickup_month`,
+       day(tpep_pickup_datetime) AS `pickup_day`
+FROM nyc_taxi;
+
+--  VERIFYING IF THE DATA IS LOADED PROPERLY
+SELECT count(*) as `Number of Records` FROM nyc_taxi_partitioned;
+
+--  OUTPUT:
+--  number of records
+--  1174569
+
+--  VERIFYING THE VALUES OF INITIAL RECORDS
+SELECT * FROM nyc_taxi_partitioned LIMIT 5;
+
+--  OUTPUT:
+--  nyc_taxi_partitioned.vendorid   nyc_taxi_partitioned.passenger_count	nyc_taxi_partitioned.trip_distance	nyc_taxi_partitioned.ratecodeid	nyc_taxi_partitioned.store_and_fwd_flag	nyc_taxi_partitioned.pulocationid	nyc_taxi_partitioned.dolocationid	nyc_taxi_partitioned.payment_type	nyc_taxi_partitioned.fare_amount	nyc_taxi_partitioned.extra	nyc_taxi_partitioned.mta_tax	nyc_taxi_partitioned.tip_amount	nyc_taxi_partitioned.tolls_amount	nyc_taxi_partitioned.improvement_surcharge	nyc_taxi_partitioned.total_amount	nyc_taxi_partitioned.speed	nyc_taxi_partitioned.pickup_year	nyc_taxi_partitioned.pickup_month	nyc_taxi_partitioned.pickup_day
+--  2	                            6	                                    18.35	                            3	                            N	                                    163	                                1	                                2	                                66.5	                            0.5	                        0	                            0	                            10.5	                            0.3	                                        77.8	                            36.7	                    2003	                            1	                                1
+--  2	                            1	                                    5.79	                            1	                            N	                                    262	                                68	                                2	                                20	                                0	                        0.5	                            0	                            0	                                0.3	                                        20.8	                            16.542857142857144	        2008	                            12	                                31
+--  2	                            5	                                    1.29	                            1	                            N	                                    261	                                88	                                2	                                8.5	                                0	                        0.5	                            0	                            0	                                0.3	                                        9.3	                                7.74	                    2008	                            12	                                31
+--  2	                            1	                                    2.62	                            1	                            N	                                    230	                                239	                                1	                                13.5	                            0.5	                        0.5	                            1	                            0	                                0.3	                                        15.8	                            8.273684210526316	        2009	                            1	                                1
+--  2	                            2	                                    1.7	                                1	                            N	                                    230	                                170	                                2	                                9.5	                                0.5	                        0.5	                            0	                            0	                                0.3	                                        10.8	                            8.5	                        2017	                            10	                                31
+
+--   _______________________________________________________
+--  |                                                       |
+--  |   DATA CLEANING AND PARTITIONED ORC TABLE CREATION    |
+--  |_______________________________________________________|
+--
+--  WRITING QUERY TO SELECT ONLY THE CLEAN DATA WITHIN OUR ANALYSIS WINDOW
+--  ADDRESSING YEAR AND MONTH           | Assumption: We are using tpep_pickup_datetime (pickup date and time should be from Nov, 2017 to Dec, 2017) as basis for selection of analysis window
+--  ADDRESSING PASSENGER COUNT          | Assumption: Passenger_count as 0 is unusual or erroneous since trip should not happen without passenger.
+--  ADDRESSING RATECODEID               | Assumption: RateCodeID as 99 is unusual or erroneous since it is not defined in Data Dictionary.
+--  ADDRESSING TRIP_DISTANCE            | Assumption: Trip_distance as 0 or less than 0 is unusual or erroneous since a trip must cover some positive distance.
+--  ADDRESSING FARE_AMOUNT              | Assumption: Fare_amount as 0 or less than 0 is unusual or erroneous since a trip must have some positive fare.
+--  ADDRESSING EXTRA                    | Assumption: Extra as less than 0 is unusual or erroneous since a trip must have 0 or some positive extra charge.
+--  ADDRESSING MTA_TAX                  | Assumption: Mta_tax as less than 0 is unusual or erroneous since a trip must have 0 or some positive MTA Tax.
+--  ADDRESSING TIP_AMOUNT               | Assumption: Tip_amount as less than 0 is unusual or erroneous since a trip must have 0 or some positive tip amount.
+--  ADDRESSING TOLLS_AMOUNT             | Assumption: Tolls_amount as less than 0 is unusual or erroneous since a trip must have 0 or some positive tolls amount.
+--  ADDRESSING IMPROVEMENT_SURCHARGE    | Assumption: Improvement_surcharge as less than 0 is unusual or erroneous since a trip must have 0 or some positive improvement surcharge.
+--  ADDRESSING TOTAL_AMOUNT             | Assumption: Total_amount as less than 0 is unusual or erroneous since a trip must have 0 or some positive total amount.
+
+SELECT *
+FROM nyc_taxi_partitioned
+WHERE pickup_year IN (2017)
+AND pickup_month IN (11,12)
+AND Passenger_count>0
+AND RateCodeID IN (1,2,3,4,5,6)
+AND Trip_distance>0
+AND Fare_amount>0
+AND Extra>=0
+AND Mta_tax>=0
+AND Tip_amount>=0
+AND Tolls_amount>=0
+AND Improvement_surcharge>=0
+AND Total_amount>0
+LIMIT 5;
+
+--  OUTPUT:
+--  nyc_taxi_partitioned.vendorid   nyc_taxi_partitioned.passenger_count    nyc_taxi_partitioned.trip_distance      nyc_taxi_partitioned.ratecodeid     nyc_taxi_partitioned.store_and_fwd_flag     nyc_taxi_partitioned.pulocationid   nyc_taxi_partitioned.dolocationid   nyc_taxi_partitioned.payment_type   nyc_taxi_partitioned.fare_amount    nyc_taxi_partitioned.extra      nyc_taxi_partitioned.mta_tax    nyc_taxi_partitioned.tip_amount     nyc_taxi_partitioned.tolls_amount   nyc_taxi_partitioned.improvement_surcharge      nyc_taxi_partitioned.total_amount       nyc_taxi_partitioned.speed      nyc_taxi_partitioned.pickup_year    nyc_taxi_partitioned.pickup_month   nyc_taxi_partitioned.pickup_day
+--  1                               1                                       5.8                                     1                                   Y                                           137                                 97                                  1                                   20.5                                0                               0.5                             3.7                                 0                                   0.3                                             25                                      17.400000000000002              2017                                11                                  1
+--  2                               1                                       0.64                                    1                                   N                                           161                                 163                                 1                                   7                                   0                               0.5                             1.56                                0                                   0.3                                             9.36                                    3.8400000000000003              2017                                11                                  1
+--  2                               1                                       1.43                                    1                                   N                                           113                                 170                                 1                                   9.5                                 0                               0.5                             2.06                                0                                   0.3                                             12.36                                   6.6                             2017                                11                                  1
+--  2                               1                                       0.9                                     1                                   N                                           229                                 137                                 1                                   4.5                                 0.5                             0.5                             0                                   0                                   0.3                                             5.8                                     27                              2017                                11                                  1
+--  1                               1                                       6                                       1                                   N                                           262                                 45                                  2                                   19                                  0                               0.5                             0                                   0                                   0.3                                             19.8                                    24                              2017                                11                                  1
+
+--  COUNTING TOTAL NUMBER OF RECORDS AFTER CLEANING DATA
+SELECT count(*) as `Number of clean rows`
+FROM nyc_taxi_partitioned
+WHERE pickup_year IN (2017)
+AND pickup_month IN (11,12)
+AND Passenger_count>0
+AND RateCodeID IN (1,2,3,4,5,6)
+AND Trip_distance>0
+AND Fare_amount>0
+AND Extra>=0
+AND Mta_tax>=0
+AND Tip_amount>=0
+AND Tolls_amount>=0
+AND Improvement_surcharge>=0
+AND Total_amount>0;
+
+--  OUTPUT:
+--  number of clean rows
+--  1159811
+
+
+--  STORING DATA IN ORC FILE FORMAT TO ENHANCE THE QUERY PERFORMANCE
+
+--  DROPPING THE EXISTING TABLES TO ENSURE WE START FRESH
+DROP TABLE IF EXISTS nyc_taxi_partitioned_orc;
+
+--  CREATING ORC TABLE TO STORE THE CLEAN DATA FOR ANALYSIS PURPOSE
+CREATE EXTERNAL TABLE nyc_taxi_partitioned_orc(
+VendorID INT,
+passenger_count TINYINT,
+trip_distance DOUBLE,
+RatecodeID TINYINT,
+store_and_fwd_flag VARCHAR(2),
+PULocationID INT,
+DOLocationID INT,
+payment_type TINYINT,
+fare_amount DOUBLE,
+extra DOUBLE,
+mta_tax DOUBLE,
+tip_amount DOUBLE,
+tolls_amount DOUBLE,
+improvement_surcharge DOUBLE,
+total_amount DOUBLE,
+speed DOUBLE)
+PARTITIONED BY (`pickup_year` INT, `pickup_month` INT, `pickup_day` INT)
+CLUSTERED BY (`tip_amount`) INTO 5 BUCKETS
+STORED AS ORC LOCATION '/user/hive/warehouse/raiaman15_nyc_taxi_partitioned_orc'
+TBLPROPERTIES ("orc.compress"="SNAPPY");
+
+--  USING AN ALTERNATE APPROACH TO CLEAN DATA, OR LOAD ONLY FILTERED DATA IN THE ORC TABLE
+--  WE WILL TRY TO AVOID USING THE ACID PROPERTY ON OUR TABLE AND LOAD ONLY CLEAN RECORDS INTO OUR PARTITIONED ORC TABLE, THUS CLEANING DATA!
+
+--  INSERTING DATA INTO THE PARTITIONED ORC TABLE FROM CLEANED PARTITIONED TABLE (USING WHERE CLAUSE)
+INSERT OVERWRITE TABLE nyc_taxi_partitioned_orc PARTITION(`pickup_year`, `pickup_month`, `pickup_day`)
+SELECT *
+FROM nyc_taxi_partitioned
+WHERE pickup_year IN (2017)
+AND pickup_month IN (11,12)
+AND Passenger_count>0
+AND RateCodeID IN (1,2,3,4,5,6)
+AND Trip_distance>0
+AND Fare_amount>0
+AND Extra>=0
+AND Mta_tax>=0
+AND Tip_amount>=0
+AND Tolls_amount>=0
+AND Improvement_surcharge>=0
+AND Total_amount>0;
+
+
+--  VERIFYING IF CLEANED DATA IS LOADED IN OUR PARTITIONED ORC TABLE
+SELECT count(*) as `Number of Records` FROM nyc_taxi_partitioned_orc;
+
+--  OUTPUT:
+--  number of records
+--  1159811
+
+--   ___________________
+--  |                   |
+--  |   ANALYSIS - I    |
+--  |___________________|
+--
+--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
+--  1.  Compare the overall average fare per trip for November and December.
+
+SELECT pickup_month AS `Month`, avg(fare_amount) AS `Average Fare Per Trip for Month`
+FROM nyc_taxi_partitioned_orc
+GROUP BY pickup_month
+ORDER BY `Average Fare Per Trip for Month` DESC;
+
+--  OUTPUT:
+--  month       average fare per trip for month
+--  11          13.06207376584404
+--  12          12.850949550495523
+
+--  SUMMARY OF RESULT:
+--  The overall average fare per trip for month of November (~13.06) was greater than that of month December (~12.85)
+
+--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
+--  2.  Explore the ‘number of passengers per trip’ - how many trips are made by each level of ‘Passenger_count’? 
+--      Do most people travel solo or with other people?
+
+SELECT passenger_count AS `Number of Passenger`, count(*) AS `Total Number of Trips with given Number of Passenger`
+FROM nyc_taxi_partitioned_orc
+GROUP BY passenger_count
+ORDER BY `Total Number of Trips with given Number of Passenger` DESC;
+
+--  OUTPUT:
+--  number of passenger     total number of trips with given number of passenger
+--  1                       821304
+--  2                       175852
+--  5                       54342
+--  3                       50459
+--  6                       33037
+--  4                       24814
+--  7                       3
+
+--  SUMMARY OF RESULT:
+--  Major chunk of passengers travel solo or with single co-passenger.
+--  Many passengers prefer travelling in group of 5, maybe for maximum utilization of overall capacity of vehicle.
+--  Yes, most people do travel solo.
+
+--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
+--  3.  Which is the most preferred mode of payment?
+
+SELECT payment_type AS `Mode of Payment`, count(*) AS `Total Number of Trips paid with given Payment Mode`
+FROM nyc_taxi_partitioned_orc
+GROUP BY payment_type
+ORDER BY `Total Number of Trips paid with given Payment Mode` DESC;
+
+--  OUTPUT:
+--  mode of payment     total number of trips paid with given payment mode
+--  1                   782807
+--  2                   370893
+--  3                   4783
+--  4                   1328
+
+--  SUMMARY OF RESULT:
+--  As per the Data Dictionary, A numeric code signifying how the passenger paid for the trip. 
+--  1= Credit card, 2= Cash, 3= No charge, 4= Dispute, 5= Unknown, 6= Voided trip
+--  The most preferred mode of payment is 1, i.e. Credit Card (with 782807 trips been paid using it).
+
+
+--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
+--  4.  What is the average tip paid per trip? 
+--      Compare the average tip with the 25th, 50th and 75th percentiles and comment whether the ‘average tip’ is a representative statistic (of the central tendency) of ‘tip amount paid’. 
+--      Hint: You may use percentile_approx(DOUBLE col, p): Returns an approximate pth percentile of a numeric column (including floating point types) in the group.
+
+SELECT  avg(tip_amount) AS `Average Tip Paid per Trip`, 
+        percentile_approx(tip_amount, 0.25) AS `25th Percentile of Tip Paid`,
+        percentile_approx(tip_amount, 0.50) AS `50th Percentile of Tip Paid`,
+        percentile_approx(tip_amount, 0.75) AS `75th Percentile of Tip Paid`
+FROM nyc_taxi_partitioned_orc;
+
+--  OUTPUT:
+--  average tip paid per trip   25th percentile of tip paid     50th percentile of tip paid     75th percentile of tip paid
+--  1.8486874068275212          0                               1.36                            2.45
+
+--  SUMMARY OF RESULT:
+--  A huge chunk of passengers do not pay tip amount (25th percentile of tip paid is 0)
+--  The ‘average tip’ (which is ~1.85) is not an exact representative statistic (of the central tendency) of ‘tip amount paid’ (50th percentile of tip paid is ~1.36).
+--  However, ‘average tip’ (which is ~1.85) do fall in between 25th percentile of tip paid (which is 0) and 75th percentile of tip paid (which is ~2.45)
+
+--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
+--  5.  Explore the ‘Extra’ (charge) variable - what fraction of total trips have an extra charge is levied?
+
+SELECT extra AS `Extra Charge Levied`, count(*) AS `Total Number of Trips with Extra Charge Levied`
+FROM nyc_taxi_partitioned_orc
+GROUP BY extra
+ORDER BY `Total Number of Trips with Extra Charge Levied` DESC;
+
+--  OUTPUT:
+--  extra charge levied     total number of trips with extra charge levied
+--  0                       622406
+--  0.5                     360316
+--  1                       172700
+--  4.5                     4324
+--  0.3                     35
+--  0.8                     14
+--  1.3                     12
+--  1.5                     2
+--  4.8                     1
+
+SELECT count(*) AS `Total Number of Trips` FROM nyc_taxi_partitioned_orc;
+
+--  OUTPUT:
+--  total number of trips
+--  1159811
+
+SELECT count(*)/1159811 AS `Fraction of Trips with Extra Charge Levied`
+FROM nyc_taxi_partitioned_orc 
+WHERE extra>0;
+
+--  OUTPUT:
+--  fraction of trips with extra charge levied
+--  0.4633556674320213
+
+--  SUMMARY OF RESULT:
+--  Extra charge is not levied for most number of trips (622406 trips have 0 Extra Charge Levied)
+--  The fraction of trips with extra charge levied is approximately 0.4633 or 46.33%.
+
+
+
+ --   ___________________
+--  |                   |
+--  |   ANALYSIS - II   |
+--  |___________________|
+--
+
+--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
+--  1.  What is the correlation between the number of passengers on any given trip, and the tip paid per trip? 
+--      Do multiple travellers tip more compared to solo travellers? Hint: Use CORR(Col_1, Col_2)
+
+SELECT CORR(passenger_count, tip_amount) AS `Correlation between the number of passengers on any given trip, and the tip paid per trip`
+FROM nyc_taxi_partitioned_orc;
+
+--  OUTPUT:
+--  correlation between the number of passengers on any given trip, and the tip paid per trip
+--  -0.004995312161391581
+
+--  SUMMARY OF RESULT:
+--  The value of Pearson coefficient is very less (-0.005), thus very less correlation exist
+--  The value of Pearson coefficient is negative and thus, multiple travellers do not tip more compared to solo travellers as per the data provided.
+
+--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
+--  2.  Segregate the data into five segments of ‘tip paid’: [0-5), [5-10), [10-15) , [15-20) and >=20. 
+--      Calculate the percentage share of each bucket (i.e. the fraction of trips falling in each bucket).
+
+SELECT count(*) AS `Total Number of Trips` FROM nyc_taxi_partitioned_orc;
+
+--  OUTPUT:
+--  total number of trips
+--  1159811
+
+SELECT Bucket_info,
+       (count(*)/1159811)*100 AS `Percentage of trips falling in each bucket`
+FROM
+  ( SELECT CASE
+               WHEN tip_amount<5 THEN "Less Than 5"
+               WHEN tip_amount<10 THEN "5 or More but Less Than 10"
+               WHEN tip_amount<15 THEN "10 or More but Less Than 15"
+               WHEN tip_amount<20 THEN "15 or More but Less Than 20"
+               ELSE "More Than 20"
+           END AS Bucket_info
+   FROM nyc_taxi_partitioned_orc) t
+GROUP BY Bucket_info
+ORDER BY `Percentage of trips falling in each bucket` DESC;
+
+--  OUTPUT:
+--  bucket_info                     percentage of trips falling in each bucket
+--  Less Than 5                     92.17838078790423
+--  5 or More but Less Than 10      5.657387281203576
+--  10 or More but Less Than 15     1.8459904243018905
+--  15 or More but Less Than 20     0.22650242151522962
+--  More Than 20                    0.09173908507506827
+
+--  SUMMARY OF RESULT:
+--  Approximately 92.18 % of trip recieved less than 5 as tip amount.
+--  Approximately 5.65 % of trip recieved 5 or more but less than 10 as tip amount.
+--  Approximately 1.845 % of trip recieved 10 or more but less than 15 as tip amount.
+--  Approximately 0.23 % of trip recieved 15 or more but less than 20 as tip amount.
+--  Approximately 0.09 % of trip recieved more than 20 as tip amount.
+
+--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
+--  3.  Which month has a greater average ‘speed’ - November or December? 
+--  Note that the variable ‘speed’ will have to be derived from other metrics. Hint: You have columns for distance and time.
+
+SELECT pickup_month, avg(speed) AS `Average speed in given month`
+FROM nyc_taxi_partitioned_orc
+GROUP BY pickup_month
+ORDER BY `Average speed in given month` DESC;
+
+--  OUTPUT:
+--  pickup_month    average speed in given month
+--  12              11.094954805646173
+--  11              10.997998295624505
+
+--  SUMMARY OF RESULT:
+--  The average speed in the month of December is slightly higher than the average speed in the month of November (by ~0.097 miles per hour)
+
+--  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --  --
+--  4.  Analyse the average speed of the most happening days of the year, 
+--      i.e. 31st December (New year’s eve) and 25th December (Christmas) and compare it with the overall average. 
+
+SELECT avg(speed) as `Overall Average Speed`
+FROM nyc_taxi_partitioned_orc;
+
+--  OUTPUT:
+--  overall average speed
+--  11.047041449724807
+
+SELECT avg(speed) as `Average speed on most happening days of the year`
+FROM nyc_taxi_partitioned_orc
+WHERE pickup_month=12
+AND pickup_day IN (25,31);
+
+--  OUTPUT:
+--  average speed on most happening days of the year
+--  14.012241213289505
+
+--  SUMMARY OF RESULT:
+--  The average speed on most happening days of the year, i.e. 31st December (New year’s eve) and 25th December (Christmas) is significantly higher (by 2.965 miles per hour) than the overall average.
+--  The reason could be less number of people travelling, as seen in EDA (less number of trips on holidays), and thus low traffic.
+--  The average speed on most happening days of the year (~14.01 miles per hour) is significantly higher than the overall average (~11.05 miles per hour)
